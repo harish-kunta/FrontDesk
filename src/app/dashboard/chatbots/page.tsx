@@ -40,7 +40,10 @@ export default async function ChatbotsPage() {
               <div className="m1-bot-icon">F</div>
               <div className="m1-bot-copy">
                 <h2>{bot.name}</h2>
-                <p>Draft · Created {bot.createdAt.toLocaleDateString()}</p>
+                <p>
+                  <span className={`m1-source-status ${bot.status}`}>{bot.status}</span> · Created{" "}
+                  {bot.createdAt.toLocaleDateString()}
+                </p>
               </div>
               <Link
                 className="button m1-button-quiet"

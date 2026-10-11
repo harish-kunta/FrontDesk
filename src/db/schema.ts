@@ -106,6 +106,23 @@ export const chatbots = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    widgetConfig: jsonb("widget_config")
+      .$type<{
+        color: string;
+        avatarUrl?: string;
+        position: "left" | "right";
+        welcomeMessage: string;
+        starterQuestions: string[];
+        allowedDomains: string[];
+      }>()
+      .notNull()
+      .default({
+        color: "#7065e8",
+        position: "right",
+        welcomeMessage: "Hi! How can I help you today?",
+        starterQuestions: [],
+        allowedDomains: [],
+      }),
     status: text("status").notNull().default("draft"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -114,9 +131,16 @@ export const chatbots = pgTable(
 
 export const sourceStatus = pgEnum("source_status", ["processing", "ready", "error"]);
 export const messageRole = pgEnum("message_role", ["user", "assistant"]);
+export const crawlJobStatus = pgEnum("crawl_job_status", [
+  "discovered",
+  "running",
+  "complete",
+  "partial",
+  "failed",
+]);
 
-// M1 only accepts pasted text. Keeping the original text lets us re-chunk and
-// re-embed it later without asking the customer to paste it again.
+// Keep original text for re-indexing; website rows also retain their canonical
+// URL and raw HTML hash so an unchanged page does not incur another embedding call.
 export const sources = pgTable(
   "sources",
   {
@@ -126,13 +150,53 @@ export const sources = pgTable(
       .references(() => chatbots.id, { onDelete: "cascade" }),
     type: text("type").notNull().default("text"),
     name: text("name").notNull(),
+    url: text("url"),
+    rawContentHash: text("raw_content_hash"),
     content: text("content").notNull(),
     status: sourceStatus("status").notNull().default("processing"),
     charCount: integer("char_count").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [index("sources_chatbot_idx").on(table.chatbotId)],
+  (table) => [
+    index("sources_chatbot_idx").on(table.chatbotId),
+    uniqueIndex("sources_chatbot_url_unique").on(table.chatbotId, table.url),
+  ],
+);
+
+export const crawlJobs = pgTable(
+  "crawl_jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    chatbotId: uuid("chatbot_id")
+      .notNull()
+      .references(() => chatbots.id, { onDelete: "cascade" }),
+    rootUrl: text("root_url").notNull(),
+    status: crawlJobStatus("status").notNull().default("discovered"),
+    discoveredPages: jsonb("discovered_pages")
+      .$type<Array<{ url: string; title: string }>>()
+      .notNull()
+      .default([]),
+    selectedUrls: jsonb("selected_urls").$type<string[]>().notNull().default([]),
+    pageResults: jsonb("page_results")
+      .$type<
+        Array<{
+          url: string;
+          requestedUrl?: string;
+          title?: string;
+          status: string;
+          message?: string;
+        }>
+      >()
+      .notNull()
+      .default([]),
+    errorMessage: text("error_message"),
+    totalPages: integer("total_pages").notNull().default(0),
+    completedPages: integer("completed_pages").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("crawl_jobs_chatbot_created_idx").on(table.chatbotId, table.createdAt)],
 );
 
 // 1536 matches the default output size of text-embedding-3-small. The

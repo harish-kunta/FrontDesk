@@ -10,6 +10,7 @@ import { EmbeddingError, embedTexts } from "@/lib/ai/embed";
 import { requireOwnedChatbot } from "@/lib/chatbots";
 import { MAX_SOURCE_CHARS } from "@/lib/rag-config";
 import { chunkText } from "@/lib/text-chunking";
+import { normalizeDomain, type WidgetConfig } from "@/lib/widget";
 import { requireWorkspace } from "@/lib/workspace";
 
 const MAX_BOTS_PER_WORKSPACE = 1;
@@ -18,6 +19,8 @@ export type SourceActionState = {
   status: "idle" | "success" | "error";
   message: string;
 };
+
+export type WidgetActionState = SourceActionState;
 
 export async function createChatbot(formData: FormData) {
   const rawName = formData.get("name");
@@ -111,6 +114,7 @@ export async function ingestTextSource(
           embedding: embeddings[index],
         })),
       );
+      await tx.update(chatbots).set({ status: "ready" }).where(eq(chatbots.id, chatbot.id));
     });
 
     revalidatePath(`/dashboard/chatbots/${chatbot.id}/playground`);
@@ -124,4 +128,83 @@ export async function ingestTextSource(
     }
     return { status: "error", message: "The source could not be saved. Please retry." };
   }
+}
+
+export async function saveWidgetSettings(
+  chatbotId: string,
+  _previousState: WidgetActionState,
+  formData: FormData,
+): Promise<WidgetActionState> {
+  const { chatbot } = await requireOwnedChatbot(chatbotId);
+  const rawColor = formData.get("color");
+  const rawAvatarUrl = formData.get("avatarUrl");
+  const rawPosition = formData.get("position");
+  const rawWelcome = formData.get("welcomeMessage");
+  const rawQuestions = formData.get("starterQuestions");
+  const rawDomains = formData.get("allowedDomains");
+  const color = typeof rawColor === "string" ? rawColor.trim() : "";
+  const avatarUrl = typeof rawAvatarUrl === "string" ? rawAvatarUrl.trim() : "";
+  const position = typeof rawPosition === "string" ? rawPosition : "right";
+  const welcomeMessage = typeof rawWelcome === "string" ? rawWelcome.trim() : "";
+  const starterQuestions =
+    typeof rawQuestions === "string"
+      ? rawQuestions
+          .split("\n")
+          .map((question) => question.trim())
+          .filter(Boolean)
+      : [];
+  const submittedDomains =
+    typeof rawDomains === "string"
+      ? rawDomains
+          .split(/[\n,]/)
+          .map((domain) => domain.trim())
+          .filter(Boolean)
+      : [];
+
+  if (!/^#[0-9a-f]{6}$/i.test(color)) {
+    return { status: "error", message: "Choose a valid six-digit hex brand color." };
+  }
+  if (avatarUrl) {
+    try {
+      const parsedAvatarUrl = new URL(avatarUrl);
+      if (parsedAvatarUrl.protocol !== "https:" || avatarUrl.length > 2_000) throw new Error();
+    } catch {
+      return { status: "error", message: "Avatar images must use a valid HTTPS URL." };
+    }
+  }
+  if (position !== "left" && position !== "right") {
+    return { status: "error", message: "Choose left or right widget placement." };
+  }
+  if (!welcomeMessage || welcomeMessage.length > 240) {
+    return { status: "error", message: "The welcome message must be 1–240 characters." };
+  }
+  if (starterQuestions.length > 3 || starterQuestions.some((question) => question.length > 80)) {
+    return {
+      status: "error",
+      message: "Add up to 3 starter questions, each 80 characters or less.",
+    };
+  }
+  if (submittedDomains.length > 20) {
+    return { status: "error", message: "Add up to 20 website domains." };
+  }
+  const allowedDomains = submittedDomains.map(normalizeDomain);
+  if (allowedDomains.some((domain) => domain === null)) {
+    return {
+      status: "error",
+      message: "Enter domains only, like example.com. Do not include a URL path or protocol.",
+    };
+  }
+
+  const widgetConfig: WidgetConfig = {
+    color,
+    avatarUrl,
+    position,
+    welcomeMessage,
+    starterQuestions,
+    allowedDomains: [...new Set(allowedDomains as string[])],
+  };
+  await db.update(chatbots).set({ widgetConfig }).where(eq(chatbots.id, chatbot.id));
+  revalidatePath(`/dashboard/chatbots/${chatbot.id}/widget`);
+  revalidatePath(`/b/${chatbot.id}`);
+  return { status: "success", message: "Widget settings saved." };
 }

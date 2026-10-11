@@ -16,7 +16,9 @@ import {
 } from "@/lib/ai/chat";
 import { EmbeddingError, embedTexts } from "@/lib/ai/embed";
 import { retrieveChunks } from "@/lib/ai/retrieval";
+import { consumePublicChatRequest } from "@/lib/public-rate-limit";
 import { RETRIEVAL_THRESHOLD } from "@/lib/rag-config";
+import { corsHeaders, DEFAULT_WIDGET_CONFIG, originIsAllowed } from "@/lib/widget";
 import { requireWorkspace } from "@/lib/workspace";
 
 export const runtime = "nodejs";
@@ -32,8 +34,59 @@ type RetrievedChunk = GroundingChunk & {
   similarity: number;
 };
 
-function jsonError(message: string, status: number) {
-  return Response.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
+function jsonError(message: string, status: number, allowedOrigin?: string) {
+  return Response.json(
+    { error: message },
+    {
+      status,
+      headers: {
+        "Cache-Control": "no-store",
+        ...(allowedOrigin ? corsHeaders(allowedOrigin) : {}),
+      },
+    },
+  );
+}
+
+async function findPostChatbot(chatbotId: string, request: Request) {
+  const session = await auth();
+  if (session?.user?.id) {
+    const owned = await findOwnedChatbot(chatbotId);
+    if (!("response" in owned)) return owned;
+  }
+  if (!UUID_PATTERN.test(chatbotId)) return { response: jsonError("Chatbot not found.", 404) };
+
+  const [chatbot] = await db
+    .select({ id: chatbots.id, widgetConfig: chatbots.widgetConfig })
+    .from(chatbots)
+    .where(eq(chatbots.id, chatbotId))
+    .limit(1);
+  if (!chatbot) return { response: jsonError("Chatbot not found.", 404) };
+
+  const origin = request.headers.get("origin");
+  if (
+    !originIsAllowed(
+      origin,
+      chatbot.widgetConfig ?? DEFAULT_WIDGET_CONFIG,
+      new URL(request.url).origin,
+    )
+  ) {
+    return { response: jsonError("This website is not enabled for this chatbot.", 403) };
+  }
+
+  const forwardedFor = request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim();
+  const clientAddress = forwardedFor || request.headers.get("x-real-ip") || "unknown";
+  const limit = consumePublicChatRequest(`${chatbot.id}:${clientAddress}`);
+  if (!limit.allowed) {
+    return {
+      response: jsonError(
+        "This assistant is receiving too many messages. Please try again shortly.",
+        429,
+        origin ?? undefined,
+      ),
+    };
+  }
+
+  return { chatbot: { id: chatbot.id }, allowedOrigin: origin ?? undefined };
 }
 
 async function findOwnedChatbot(chatbotId: string) {
@@ -81,6 +134,7 @@ async function loadCitations(chunkIds: string[], chatbotId: string) {
     .select({
       id: chunks.id,
       sourceName: sources.name,
+      sourceUrl: sources.url,
       chunkIndex: chunks.chunkIndex,
     })
     .from(chunks)
@@ -89,7 +143,16 @@ async function loadCitations(chunkIds: string[], chatbotId: string) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   return uniqueIds.flatMap((id) => {
     const row = byId.get(id);
-    return row ? [{ id: row.id, sourceName: row.sourceName, chunkIndex: row.chunkIndex }] : [];
+    return row
+      ? [
+          {
+            id: row.id,
+            sourceName: row.sourceName,
+            sourceUrl: row.sourceUrl,
+            chunkIndex: row.chunkIndex,
+          },
+        ]
+      : [];
   });
 }
 
@@ -149,18 +212,19 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   const { chatbotId } = await context.params;
-  const owned = await findOwnedChatbot(chatbotId);
+  const owned = await findPostChatbot(chatbotId, request);
   if ("response" in owned) return owned.response;
+  const allowedOrigin = "allowedOrigin" in owned ? owned.allowedOrigin : undefined;
 
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return jsonError("Send a valid JSON request.", 400);
+    return jsonError("Send a valid JSON request.", 400, allowedOrigin);
   }
 
   if (typeof body !== "object" || body === null)
-    return jsonError("Send a question to the assistant.", 400);
+    return jsonError("Send a question to the assistant.", 400, allowedOrigin);
   const rawQuestion = "question" in body ? body.question : undefined;
   const rawConversationId = "conversationId" in body ? body.conversationId : undefined;
   const question = typeof rawQuestion === "string" ? rawQuestion.trim() : "";
@@ -171,10 +235,11 @@ export async function POST(request: Request, context: RouteContext) {
     return jsonError(
       `Enter a question up to ${MAX_QUESTION_CHARS.toLocaleString()} characters long.`,
       400,
+      allowedOrigin,
     );
   }
   if (requestedConversationId && !UUID_PATTERN.test(requestedConversationId)) {
-    return jsonError("Conversation not found.", 404);
+    return jsonError("Conversation not found.", 404, allowedOrigin);
   }
 
   const existingConversation = requestedConversationId
@@ -194,6 +259,7 @@ export async function POST(request: Request, context: RouteContext) {
         ? error.message
         : "The question could not be searched. Please retry.",
       503,
+      allowedOrigin,
     );
   }
 
@@ -232,7 +298,7 @@ export async function POST(request: Request, context: RouteContext) {
         error instanceof ChatGenerationError
           ? error.message
           : "The assistant could not start a response. Please retry.";
-      return jsonError(message, 503);
+      return jsonError(message, 503, allowedOrigin);
     }
   }
 
@@ -286,7 +352,7 @@ export async function POST(request: Request, context: RouteContext) {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
       send("conversation", { conversationId: conversation.id });
-      send("context", debugContext);
+      if (!allowedOrigin) send("context", debugContext);
 
       if (!upstream?.body) {
         await saveAssistantMessage({
@@ -458,6 +524,30 @@ export async function POST(request: Request, context: RouteContext) {
       Connection: "keep-alive",
       "Content-Type": "text/event-stream; charset=utf-8",
       "X-Accel-Buffering": "no",
+      ...(allowedOrigin ? corsHeaders(allowedOrigin) : {}),
     },
   });
+}
+
+export async function OPTIONS(request: Request, context: RouteContext) {
+  const { chatbotId } = await context.params;
+  if (!UUID_PATTERN.test(chatbotId)) return new Response(null, { status: 404 });
+  const origin = request.headers.get("origin");
+  if (!origin) return new Response(null, { status: 403 });
+  const [chatbot] = await db
+    .select({ widgetConfig: chatbots.widgetConfig })
+    .from(chatbots)
+    .where(eq(chatbots.id, chatbotId))
+    .limit(1);
+  if (!chatbot) return new Response(null, { status: 404 });
+  if (
+    !originIsAllowed(
+      origin,
+      chatbot.widgetConfig ?? DEFAULT_WIDGET_CONFIG,
+      new URL(request.url).origin,
+    )
+  ) {
+    return new Response(null, { status: 403 });
+  }
+  return new Response(null, { status: 204, headers: corsHeaders(origin) });
 }

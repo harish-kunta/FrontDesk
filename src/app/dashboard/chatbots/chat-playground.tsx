@@ -2,7 +2,13 @@
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
-type Citation = { id: string; sourceName: string; chunkIndex: number; reference: number };
+type Citation = {
+  id: string;
+  sourceName: string;
+  sourceUrl?: string | null;
+  chunkIndex: number;
+  reference: number;
+};
 type PlaygroundMessage = {
   id: string;
   role: "user" | "assistant";
@@ -274,12 +280,25 @@ export function ChatPlayground({ chatbotId, model }: { chatbotId: string; model:
                 {message.citations.length > 0 && (
                   <div className="m2-citations">
                     <span>Sources</span>
-                    {message.citations.map((citation) => (
-                      <span className="m2-citation" key={citation.id}>
-                        [{citation.reference}] {citation.sourceName} · passage{" "}
-                        {citation.chunkIndex + 1}
-                      </span>
-                    ))}
+                    {message.citations.map((citation) =>
+                      citation.sourceUrl ? (
+                        <a
+                          className="m2-citation"
+                          href={citation.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          key={citation.id}
+                        >
+                          [{citation.reference}] {citation.sourceName} · passage{" "}
+                          {citation.chunkIndex + 1} ↗
+                        </a>
+                      ) : (
+                        <span className="m2-citation" key={citation.id}>
+                          [{citation.reference}] {citation.sourceName} · passage{" "}
+                          {citation.chunkIndex + 1}
+                        </span>
+                      ),
+                    )}
                   </div>
                 )}
                 {message.role === "assistant" && message.latencyMs !== undefined && (

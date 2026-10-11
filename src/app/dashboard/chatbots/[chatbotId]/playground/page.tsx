@@ -6,7 +6,9 @@ import { chunks, sources } from "@/db/schema";
 import { CHAT_MODEL } from "@/lib/ai/chat";
 import { listWorkspaceChatbots, requireOwnedChatbot } from "@/lib/chatbots";
 import { ChatPlayground } from "../../chat-playground";
+import { CrawlForm } from "../../crawl-form";
 import { SourceForm } from "../../source-form";
+import { SourceManager } from "../../source-manager";
 
 type PlaygroundPageProps = {
   params: Promise<{ chatbotId: string }>;
@@ -21,6 +23,8 @@ export default async function PlaygroundPage({ params }: PlaygroundPageProps) {
       .select({
         id: sources.id,
         name: sources.name,
+        type: sources.type,
+        url: sources.url,
         status: sources.status,
         charCount: sources.charCount,
         createdAt: sources.createdAt,
@@ -42,11 +46,19 @@ export default async function PlaygroundPage({ params }: PlaygroundPageProps) {
           <Link className="m1-back-link" href="/dashboard/chatbots">
             ← All chatbots
           </Link>
-          <div className="eyebrow">M2 · RETRIEVE, ANSWER, CITE</div>
+          <div className="eyebrow">M3 · CRAWL, EXTRACT, INDEX</div>
           <h1>{chatbot.name} playground</h1>
-          <p>Ask questions, see how the model uses your sources, and inspect every answer.</p>
+          <p>Add website pages or pasted text, then see how the assistant uses each source.</p>
         </div>
-        <span className="m1-status-pill">{chatbot.status}</span>
+        <div className="m4-playground-actions">
+          <Link
+            className="button button-secondary"
+            href={`/dashboard/chatbots/${chatbot.id}/widget`}
+          >
+            Set up visitor chat →
+          </Link>
+          <span className="m1-status-pill">{chatbot.status}</span>
+        </div>
       </div>
 
       <div className="m1-learning-strip">
@@ -68,15 +80,19 @@ export default async function PlaygroundPage({ params }: PlaygroundPageProps) {
         <section className="m1-panel">
           <div className="m1-panel-heading">
             <div>
-              <div className="eyebrow">KNOWLEDGE SOURCE</div>
-              <h2>Paste text</h2>
+              <div className="eyebrow">WEBSITE SOURCE</div>
+              <h2>Crawl a website</h2>
             </div>
-            <span className="m1-model-pill">Text only · 100K characters max</span>
+            <span className="m1-model-pill">Up to 20 same-host pages</span>
           </div>
           <p className="m1-intro-copy">
-            Start with an FAQ, shipping policy, or product notes. We keep your source and save its
-            chunks with this chatbot’s ID.
+            Discover pages from the sitemap or site links, choose what belongs in your assistant,
+            and watch extraction and indexing progress.
           </p>
+          <CrawlForm chatbotId={chatbot.id} />
+          <div className="m3-text-source-divider">
+            <span>OR ADD TEXT DIRECTLY</span>
+          </div>
           <SourceForm chatbotId={chatbot.id} />
         </section>
 
@@ -93,24 +109,17 @@ export default async function PlaygroundPage({ params }: PlaygroundPageProps) {
         </div>
         {sourceRows.length === 0 ? (
           <div className="m1-source-empty">
-            <span>Nothing indexed yet.</span> Paste a short FAQ above to create the first source.
+            <span>Nothing indexed yet.</span> Crawl a website or paste a short FAQ to create the
+            first source.
           </div>
         ) : (
-          <div className="m1-source-list">
-            {sourceRows.map((source) => (
-              <article className="m1-source-row" key={source.id}>
-                <div className="m1-source-icon">TXT</div>
-                <div className="m1-source-copy">
-                  <b>{source.name}</b>
-                  <span>
-                    {source.charCount.toLocaleString()} characters · {source.chunkCount} chunks ·{" "}
-                    {source.createdAt.toLocaleDateString()}
-                  </span>
-                </div>
-                <span className={`m1-source-status ${source.status}`}>{source.status}</span>
-              </article>
-            ))}
-          </div>
+          <SourceManager
+            chatbotId={chatbot.id}
+            sources={sourceRows.map((source) => ({
+              ...source,
+              createdAt: source.createdAt.toISOString(),
+            }))}
+          />
         )}
       </section>
 

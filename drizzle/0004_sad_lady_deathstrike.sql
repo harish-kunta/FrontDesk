@@ -1,0 +1,1 @@
+ALTER TABLE "chatbots" ADD COLUMN "widget_config" jsonb DEFAULT '{"color":"#7065e8","position":"right","welcomeMessage":"Hi! How can I help you today?","starterQuestions":[],"allowedDomains":[]}'::jsonb NOT NULL;
