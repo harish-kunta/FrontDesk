@@ -1,12 +1,15 @@
 import {
-  pgEnum,
   index,
+  integer,
+  jsonb,
+  pgEnum,
   pgTable,
   primaryKey,
-  integer,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
+  vector,
 } from "drizzle-orm/pg-core";
 
 // Auth.js owns identity records. The app-specific tables below attach identity
@@ -93,12 +96,65 @@ export const workspaceMembers = pgTable(
 
 // A minimal chatbot table makes the first dashboard query tenant-scoped from
 // day one. M1 will add sources, chunks, and embeddings.
-export const chatbots = pgTable("chatbots", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  workspaceId: uuid("workspace_id")
-    .notNull()
-    .references(() => workspaces.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  status: text("status").notNull().default("draft"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const chatbots = pgTable(
+  "chatbots",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    status: text("status").notNull().default("draft"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("chatbots_workspace_unique").on(table.workspaceId)],
+);
+
+export const sourceStatus = pgEnum("source_status", ["processing", "ready", "error"]);
+
+// M1 only accepts pasted text. Keeping the original text lets us re-chunk and
+// re-embed it later without asking the customer to paste it again.
+export const sources = pgTable(
+  "sources",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    chatbotId: uuid("chatbot_id")
+      .notNull()
+      .references(() => chatbots.id, { onDelete: "cascade" }),
+    type: text("type").notNull().default("text"),
+    name: text("name").notNull(),
+    content: text("content").notNull(),
+    status: sourceStatus("status").notNull().default("processing"),
+    charCount: integer("char_count").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("sources_chatbot_idx").on(table.chatbotId)],
+);
+
+// 1536 matches the default output size of text-embedding-3-small. The
+// chatbot_id filter is part of every retrieval query for tenant isolation.
+export const chunks = pgTable(
+  "chunks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    chatbotId: uuid("chatbot_id")
+      .notNull()
+      .references(() => chatbots.id, { onDelete: "cascade" }),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => sources.id, { onDelete: "cascade" }),
+    content: text("content").notNull(),
+    chunkIndex: integer("chunk_index").notNull(),
+    tokenCount: integer("token_count").notNull(),
+    contentHash: text("content_hash").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, string | number>>().notNull().default({}),
+    embedding: vector("embedding", { dimensions: 1536 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("chunks_chatbot_idx").on(table.chatbotId),
+    index("chunks_source_order_idx").on(table.sourceId, table.chunkIndex),
+    index("chunks_embedding_hnsw_idx").using("hnsw", table.embedding.op("vector_cosine_ops")),
+  ],
+);

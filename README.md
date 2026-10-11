@@ -2,7 +2,7 @@
 
 FrontDesk is a website-trained support and sales chatbot platform. A business will be able to add its website or documents, then give visitors a chat assistant that answers from that content, cites sources, and hands off when it does not know.
 
-This repository is being built in milestones from [the product plan](./ai-chatbot-build-plan.md). The current milestone is **M0: application skeleton**.
+This repository is being built in milestones from [the product plan](./ai-chatbot-build-plan.md). The current milestone is **M1: paste-text ingestion and retrieval**.
 
 ## Stack
 
@@ -15,11 +15,14 @@ This repository is being built in milestones from [the product plan](./ai-chatbo
 
 1. Install dependencies with `pnpm install`.
 2. Start local PostgreSQL with pgvector using `pnpm db:up` (Docker required).
-3. Copy `.env.example` to `.env`, generate `AUTH_SECRET` with `openssl rand -base64 32`, and set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` from Google Cloud Console.
+3. Create `.env` in the project root (copy `.env.example` if available), generate `AUTH_SECRET` with `openssl rand -base64 32`, and set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` from Google Cloud Console.
 4. Add `http://localhost:3000/api/auth/callback/google` as an authorized Google OAuth redirect URI.
-5. Run `pnpm db:migrate`, then `pnpm dev`.
+5. Add `OPENAI_API_KEY` to `.env` for M1 text indexing. The app uses it only on the server to request embeddings.
+6. Run `pnpm db:migrate`, then `pnpm dev`.
 
-The sign-in page explains the OAuth configuration when Google credentials are missing. The dashboard and database migrations require a reachable PostgreSQL instance. Run the M0 route smoke test with `pnpm test:smoke`.
+The sign-in page explains the OAuth configuration when Google credentials are missing. The dashboard and database migrations require a reachable PostgreSQL instance. Run the M0 route smoke test with `pnpm test:smoke` and the M1 chunking checks with `pnpm test:chunking`.
+
+For M1 text indexing, add `OPENAI_API_KEY` to your local `.env` file. The key is used only by the server-side embedding module and is never sent to the browser. M1 uses the OpenAI `text-embedding-3-small` model; the chat model is added in M2.
 
 ## Project structure
 
@@ -30,4 +33,4 @@ The sign-in page explains the OAuth configuration when Google credentials are mi
 
 ## Current scope
 
-M0 establishes authentication, the initial workspace boundary, and an empty dashboard. M1 will add the first content ingestion and retrieval flow; this repository does not yet make LLM calls.
+M0 established authentication and the initial workspace boundary. M1 adds one chatbot per workspace, pasted-text sources, chunking, OpenAI embeddings, pgvector storage, and a retrieval playground that shows matching chunks, similarity scores, and a prompt preview. M1 does not yet generate chatbot answers; that is M2.

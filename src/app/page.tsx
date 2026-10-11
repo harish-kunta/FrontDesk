@@ -35,7 +35,7 @@ export default function HomePage() {
             <span className="quiet-note">A thoughtful little AI front desk.</span>
           </div>
         </div>
-        <div className="hero-art" aria-label="A preview of the FrontDesk chat assistant">
+        <div className="hero-art" role="img" aria-label="A preview of the FrontDesk chat assistant">
           <div className="orbit orbit-one" />
           <div className="orbit orbit-two" />
           <div className="art-spark spark-one">✳</div>

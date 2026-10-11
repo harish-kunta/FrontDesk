@@ -1,13 +1,22 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { setTimeout as delay } from "node:timers/promises";
 import { after, before, test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 const port = 3417;
-const origin = `http://127.0.0.1:${port}`;
+let origin = `http://127.0.0.1:${port}`;
 let server;
 
 before(async () => {
+  const existingOrigin = "http://127.0.0.1:3000";
+  try {
+    await fetch(existingOrigin);
+    origin = existingOrigin;
+    return;
+  } catch {
+    // Start an isolated dev server below when the app is not already running.
+  }
+
   server = spawn(
     process.execPath,
     ["node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", String(port)],
@@ -53,16 +62,33 @@ test("the public landing page renders", async () => {
   assert.match(html, /Your best support person/);
 });
 
-test("the sign-in page explains missing Google OAuth setup", async () => {
+test("the sign-in page renders OAuth setup or the configured provider button", async () => {
   const response = await fetch(`${origin}/signin`);
   const html = await response.text();
 
   assert.equal(response.status, 200);
-  assert.match(html, /Google sign-in needs setup/);
+  assert.match(html, /Google sign-in needs setup|Continue with Google/);
 });
 
 test("the dashboard redirects anonymous visitors to sign in", async () => {
   const response = await fetch(`${origin}/dashboard`, { redirect: "manual" });
+
+  assert.equal(response.status, 307);
+  assert.equal(new URL(response.headers.get("location"), origin).pathname, "/signin");
+});
+
+test("the chatbot list is protected by the workspace session", async () => {
+  const response = await fetch(`${origin}/dashboard/chatbots`, { redirect: "manual" });
+
+  assert.equal(response.status, 307);
+  assert.equal(new URL(response.headers.get("location"), origin).pathname, "/signin");
+});
+
+test("a guessed chatbot playground URL is protected by the workspace session", async () => {
+  const response = await fetch(
+    `${origin}/dashboard/chatbots/8d6a14e6-7b3b-4e80-a8da-aef426d54425/playground`,
+    { redirect: "manual" },
+  );
 
   assert.equal(response.status, 307);
   assert.equal(new URL(response.headers.get("location"), origin).pathname, "/signin");

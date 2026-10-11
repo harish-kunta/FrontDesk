@@ -8,6 +8,13 @@
       "when": 1791715684138,
       "tag": "0000_loud_magus",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791718202209,
+      "tag": "0001_ancient_captain_flint",
+      "breakpoints": true
     }
   ]
 }

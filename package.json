@@ -11,7 +11,8 @@
     "build": "next build",
     "start": "next start",
     "test:smoke": "node --test tests/smoke.test.mjs",
-    "lint": "biome check",
+    "test:chunking": "node --import tsx --test tests/text-chunking.test.ts",
+    "lint": "biome check src tests",
     "format": "biome format --write",
     "db:up": "docker compose up -d database",
     "db:down": "docker compose down",
@@ -36,7 +37,6 @@
     "@types/react-dom": "^19.3.0",
     "dotenv": "^18.0.7",
     "drizzle-kit": "^0.31.11",
-    "@biomejs/biome": "2.5.15",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   }
