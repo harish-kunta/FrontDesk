@@ -12,6 +12,7 @@
     "start": "next start",
     "test:smoke": "node --test tests/smoke.test.mjs",
     "test:chunking": "node --import tsx --test tests/text-chunking.test.ts",
+    "eval:rag": "tsx scripts/evaluate-rag.ts",
     "lint": "biome check src tests",
     "format": "biome format --write",
     "db:up": "docker compose up -d database",

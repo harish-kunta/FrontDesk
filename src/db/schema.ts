@@ -1,10 +1,12 @@
 import {
+  boolean,
   index,
   integer,
   jsonb,
   pgEnum,
   pgTable,
   primaryKey,
+  serial,
   text,
   timestamp,
   uniqueIndex,
@@ -111,6 +113,7 @@ export const chatbots = pgTable(
 );
 
 export const sourceStatus = pgEnum("source_status", ["processing", "ready", "error"]);
+export const messageRole = pgEnum("message_role", ["user", "assistant"]);
 
 // M1 only accepts pasted text. Keeping the original text lets us re-chunk and
 // re-embed it later without asking the customer to paste it again.
@@ -157,4 +160,40 @@ export const chunks = pgTable(
     index("chunks_source_order_idx").on(table.sourceId, table.chunkIndex),
     index("chunks_embedding_hnsw_idx").using("hnsw", table.embedding.op("vector_cosine_ops")),
   ],
+);
+
+// M2 conversations are scoped through their chatbot. Every API lookup first
+// proves that the chatbot belongs to the signed-in user's workspace.
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    chatbotId: uuid("chatbot_id")
+      .notNull()
+      .references(() => chatbots.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("conversations_chatbot_updated_idx").on(table.chatbotId, table.updatedAt)],
+);
+
+export const messages = pgTable(
+  "messages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    sequence: serial("sequence").notNull().unique(),
+    role: messageRole("role").notNull(),
+    content: text("content").notNull(),
+    citedChunkIds: jsonb("cited_chunk_ids").$type<string[]>().notNull().default([]),
+    model: text("model"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    latencyMs: integer("latency_ms"),
+    isFallback: boolean("is_fallback").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("messages_conversation_sequence_idx").on(table.conversationId, table.sequence)],
 );

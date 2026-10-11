@@ -1,4 +1,5 @@
-export const RETRIEVAL_THRESHOLD = 0.4;
+// Calibrated against the retrieval-only golden set; large FAQ chunks need a lower cutoff.
+export const RETRIEVAL_THRESHOLD = 0.3;
 export const RETRIEVAL_LIMIT = 5;
 export const CHUNK_TARGET_CHARS = 3_600;
 export const CHUNK_OVERLAP_CHARS = 480;

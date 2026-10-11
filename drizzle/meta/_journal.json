@@ -15,6 +15,13 @@
       "when": 1791718202209,
       "tag": "0001_ancient_captain_flint",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791720360451,
+      "tag": "0002_gray_maestro",
+      "breakpoints": true
     }
   ]
 }

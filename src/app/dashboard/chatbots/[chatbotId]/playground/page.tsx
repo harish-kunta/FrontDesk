@@ -3,8 +3,9 @@ import Link from "next/link";
 import { WorkspaceFrame } from "@/app/dashboard/workspace-frame";
 import { db } from "@/db";
 import { chunks, sources } from "@/db/schema";
+import { CHAT_MODEL } from "@/lib/ai/chat";
 import { listWorkspaceChatbots, requireOwnedChatbot } from "@/lib/chatbots";
-import { SearchPlayground } from "../../search-playground";
+import { ChatPlayground } from "../../chat-playground";
 import { SourceForm } from "../../source-form";
 
 type PlaygroundPageProps = {
@@ -41,25 +42,25 @@ export default async function PlaygroundPage({ params }: PlaygroundPageProps) {
           <Link className="m1-back-link" href="/dashboard/chatbots">
             ← All chatbots
           </Link>
-          <div className="eyebrow">M1 · PASTE TEXT, THEN SEARCH</div>
+          <div className="eyebrow">M2 · RETRIEVE, ANSWER, CITE</div>
           <h1>{chatbot.name} playground</h1>
-          <p>Teach the assistant from your own content and inspect retrieval before it answers.</p>
+          <p>Ask questions, see how the model uses your sources, and inspect every answer.</p>
         </div>
         <span className="m1-status-pill">{chatbot.status}</span>
       </div>
 
       <div className="m1-learning-strip">
         <div>
-          <b>1. Chunk</b>
-          <span>Split text into overlapping pieces</span>
+          <b>1. Retrieve</b>
+          <span>Find passages related to the question</span>
         </div>
         <div>
-          <b>2. Embed</b>
-          <span>Turn each piece into 1,536 numbers</span>
+          <b>2. Generate</b>
+          <span>Give the LLM only the matching passages</span>
         </div>
         <div>
-          <b>3. Retrieve</b>
-          <span>Rank by cosine similarity to a question</span>
+          <b>3. Cite and save</b>
+          <span>Show sources and keep this conversation</span>
         </div>
       </div>
 
@@ -79,7 +80,7 @@ export default async function PlaygroundPage({ params }: PlaygroundPageProps) {
           <SourceForm chatbotId={chatbot.id} />
         </section>
 
-        <SearchPlayground chatbotId={chatbot.id} />
+        <ChatPlayground chatbotId={chatbot.id} model={CHAT_MODEL} />
       </div>
 
       <section className="m1-panel m1-sources-panel">
@@ -114,8 +115,9 @@ export default async function PlaygroundPage({ params }: PlaygroundPageProps) {
       </section>
 
       <p className="m1-learning-note">
-        M1 stops at retrieval. The context preview is what we would give a chat model; M2 will add
-        generated answers, citations, and the “I don’t know” fallback.
+        RAG means retrieval-augmented generation: search narrows the source material first, then an
+        LLM writes an answer from those passages. The model never receives another workspace’s
+        chunks, and low-relevance questions get a fixed “I don’t know” response before generation.
       </p>
     </WorkspaceFrame>
   );
