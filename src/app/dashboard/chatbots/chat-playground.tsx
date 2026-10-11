@@ -32,6 +32,12 @@ type DebugInfo = {
   retrieved: DebugChunk[];
   usedChunks: DebugChunk[];
   prompt: string;
+  queryRewrite?: {
+    original: string;
+    rewritten: string | null;
+    similarityBefore: number;
+    similarityAfter: number;
+  } | null;
 };
 
 const starterQuestions = [
@@ -368,6 +374,17 @@ export function ChatPlayground({ chatbotId, model }: { chatbotId: string; model:
             <span>{debug.usedChunks.length} passages sent to the model</span>
             <span>Cosine threshold {debug.threshold.toFixed(2)}</span>
           </div>
+          {debug.queryRewrite && (
+            <p>
+              Search spelling recovery: “{debug.queryRewrite.original}” → “
+              {debug.queryRewrite.rewritten}” ({debug.queryRewrite.similarityBefore.toFixed(3)} →{" "}
+              {debug.queryRewrite.similarityAfter.toFixed(3)} similarity)
+              {debug.queryRewrite.similarityAfter > debug.queryRewrite.similarityBefore &&
+              debug.queryRewrite.similarityAfter >= debug.threshold
+                ? " · improved search used"
+                : " · no stronger grounded match; original question kept the fallback"}
+            </p>
+          )}
           <div className="m2-debug-chunks">
             {debug.retrieved.map((chunk, index) => (
               <article className="m2-debug-chunk" key={chunk.id}>

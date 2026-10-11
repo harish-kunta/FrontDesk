@@ -105,10 +105,12 @@ export async function startChatResponse(input: {
   throw new ChatGenerationError(`OpenAI could not generate an answer (HTTP ${response.status}).`);
 }
 
-export async function generateChatAnswer(input: {
+export async function generateChatAnswerWithUsage(input: {
   instructions: string;
   history: ChatHistoryMessage[];
   question: string;
+  maxOutputTokens?: number;
+  temperature?: number;
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -129,8 +131,8 @@ export async function generateChatAnswer(input: {
         model: CHAT_MODEL,
         instructions: input.instructions,
         input: buildChatInput(input.history, input.question),
-        max_output_tokens: 500,
-        temperature: 0.2,
+        max_output_tokens: input.maxOutputTokens ?? 500,
+        temperature: input.temperature ?? 0.2,
         store: false,
       }),
     });
@@ -155,6 +157,7 @@ export async function generateChatAnswer(input: {
   const result = (await response.json()) as {
     output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
     output_text?: string;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
   const answer =
     result.output_text ??
@@ -166,5 +169,35 @@ export async function generateChatAnswer(input: {
     "";
   if (!answer.trim())
     throw new ChatGenerationError("OpenAI returned an empty answer. Please retry.");
-  return answer.trim();
+  return {
+    answer: answer.trim(),
+    inputTokens: result.usage?.input_tokens ?? null,
+    outputTokens: result.usage?.output_tokens ?? null,
+  };
+}
+
+export async function generateChatAnswer(input: {
+  instructions: string;
+  history: ChatHistoryMessage[];
+  question: string;
+  maxOutputTokens?: number;
+  temperature?: number;
+}) {
+  const result = await generateChatAnswerWithUsage(input);
+  return result.answer;
+}
+
+/** Correct likely spelling mistakes without answering the visitor's question. */
+export async function rewriteSearchQuestion(question: string) {
+  return generateChatAnswerWithUsage({
+    instructions: [
+      "Rewrite the user's search question only to correct clear spelling mistakes or obvious transcription typos.",
+      "Preserve the exact meaning, names, numbers, and intent. Do not answer the question, add facts, or expand it into a different question.",
+      "Return only the corrected question. If no correction is needed, return the original question unchanged.",
+    ].join(" "),
+    history: [],
+    question,
+    maxOutputTokens: 80,
+    temperature: 0,
+  });
 }

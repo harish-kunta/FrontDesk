@@ -14,10 +14,12 @@ import {
   isFallbackAnswer,
   startChatResponse,
 } from "@/lib/ai/chat";
+import { rewriteSearchQuestion } from "@/lib/ai/chat-provider";
 import { EmbeddingError, embedTexts } from "@/lib/ai/embed";
 import { retrieveChunks } from "@/lib/ai/retrieval";
+import { getCourtesyReply } from "@/lib/ai/visitor-intents";
 import { consumePublicChatRequest } from "@/lib/public-rate-limit";
-import { RETRIEVAL_THRESHOLD } from "@/lib/rag-config";
+import { QUERY_REWRITE_MIN_SIMILARITY, RETRIEVAL_THRESHOLD } from "@/lib/rag-config";
 import { corsHeaders, DEFAULT_WIDGET_CONFIG, originIsAllowed } from "@/lib/widget";
 import { requireWorkspace } from "@/lib/workspace";
 
@@ -33,6 +35,95 @@ type RetrievedChunk = GroundingChunk & {
   tokenCount: number;
   similarity: number;
 };
+
+function editDistanceAtMostTwo(left: string, right: string) {
+  if (Math.abs(left.length - right.length) > 2) return false;
+
+  // Damerau-Levenshtein with a small cutoff: single-character typos and
+  // adjacent transpositions are common, while larger rewrites are unsafe.
+  const rows = Array.from({ length: left.length + 1 }, () =>
+    Array<number>(right.length + 1).fill(0),
+  );
+  for (let i = 0; i <= left.length; i++) rows[i][0] = i;
+  for (let j = 0; j <= right.length; j++) rows[0][j] = j;
+
+  for (let i = 1; i <= left.length; i++) {
+    for (let j = 1; j <= right.length; j++) {
+      const substitutionCost = left[i - 1] === right[j - 1] ? 0 : 1;
+      rows[i][j] = Math.min(
+        rows[i - 1][j] + 1,
+        rows[i][j - 1] + 1,
+        rows[i - 1][j - 1] + substitutionCost,
+      );
+      if (i > 1 && j > 1 && left[i - 1] === right[j - 2] && left[i - 2] === right[j - 1]) {
+        rows[i][j] = Math.min(rows[i][j], rows[i - 2][j - 2] + 1);
+      }
+    }
+  }
+
+  return rows[left.length][right.length] <= 2;
+}
+
+function selectSafeSearchRewrite(original: string, candidate: string) {
+  const cleaned = candidate
+    .replace(/^['"“”]|['"“”]$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned || cleaned.length > MAX_QUESTION_CHARS || cleaned === original) return null;
+
+  const originalWords = original.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const candidateWords = cleaned.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (originalWords.length !== candidateWords.length) return null;
+
+  let changedWords = 0;
+  for (let index = 0; index < originalWords.length; index++) {
+    const before = originalWords[index].toLocaleLowerCase();
+    const after = candidateWords[index].toLocaleLowerCase();
+    if (before === after) continue;
+    if (before.length < 4 || after.length < 4 || !editDistanceAtMostTwo(before, after)) return null;
+    changedWords++;
+  }
+
+  return changedWords > 0 ? cleaned : null;
+}
+
+function eventStreamResponse(events: Array<[string, unknown]>, allowedOrigin?: string) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const [event, data] of events) {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "X-Accel-Buffering": "no",
+      ...(allowedOrigin ? corsHeaders(allowedOrigin) : {}),
+    },
+  });
+}
+
+function addUsage(
+  modelUsage: { inputTokens: number | null; outputTokens: number | null },
+  additionalUsage: { inputTokens: number | null; outputTokens: number | null } | null,
+) {
+  if (!additionalUsage) return modelUsage;
+  return {
+    inputTokens:
+      modelUsage.inputTokens === null && additionalUsage.inputTokens === null
+        ? null
+        : (modelUsage.inputTokens ?? 0) + (additionalUsage.inputTokens ?? 0),
+    outputTokens:
+      modelUsage.outputTokens === null && additionalUsage.outputTokens === null
+        ? null
+        : (modelUsage.outputTokens ?? 0) + (additionalUsage.outputTokens ?? 0),
+  };
+}
 
 function jsonError(message: string, status: number, allowedOrigin?: string) {
   return Response.json(
@@ -249,6 +340,69 @@ export async function POST(request: Request, context: RouteContext) {
     return jsonError("Conversation not found.", 404);
 
   const requestStartedAt = Date.now();
+  const courtesyReply = getCourtesyReply(question);
+  if (courtesyReply) {
+    const conversation = existingConversation
+      ? existingConversation
+      : (
+          await db
+            .insert(conversations)
+            .values({ chatbotId: owned.chatbot.id })
+            .returning({ id: conversations.id })
+        )[0];
+    await db.transaction(async (tx) => {
+      await tx.insert(messages).values({
+        conversationId: conversation.id,
+        role: "user",
+        content: question,
+      });
+      await tx.insert(messages).values({
+        conversationId: conversation.id,
+        role: "assistant",
+        content: courtesyReply,
+        model: null,
+        latencyMs: Date.now() - requestStartedAt,
+        isFallback: false,
+      });
+      await tx
+        .update(conversations)
+        .set({ updatedAt: new Date() })
+        .where(eq(conversations.id, conversation.id));
+    });
+
+    const latencyMs = Date.now() - requestStartedAt;
+    const events: Array<[string, unknown]> = [
+      ["conversation", { conversationId: conversation.id }],
+    ];
+    if (!allowedOrigin) {
+      events.push([
+        "context",
+        {
+          threshold: RETRIEVAL_THRESHOLD,
+          model: CHAT_MODEL,
+          retrieved: [],
+          usedChunks: [],
+          prompt:
+            "A simple courtesy reply was returned without document retrieval or a model call.",
+        },
+      ]);
+    }
+    events.push(
+      ["delta", { delta: courtesyReply }],
+      [
+        "done",
+        {
+          answer: courtesyReply,
+          citations: [],
+          fallback: false,
+          usage: null,
+          latencyMs,
+        },
+      ],
+    );
+    return eventStreamResponse(events, allowedOrigin);
+  }
+
   let queryEmbedding: number[];
   try {
     const result = await embedTexts([question]);
@@ -263,20 +417,67 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
-  const retrievedRows = await retrieveChunks(owned.chatbot.id, queryEmbedding);
+  const initialRows = await retrieveChunks(owned.chatbot.id, queryEmbedding);
 
-  const retrieved: RetrievedChunk[] = retrievedRows.map((row) => ({
+  let retrieved: RetrievedChunk[] = initialRows.map((row) => ({
     ...row,
     similarity: Number(row.similarity),
   }));
-  const groundingChunks = retrieved.filter((chunk) => chunk.similarity >= RETRIEVAL_THRESHOLD);
+  const initialTopSimilarity = retrieved[0]?.similarity ?? 0;
+  let rewriteUsage: { inputTokens: number | null; outputTokens: number | null } | null = null;
+  let queryRewrite: {
+    original: string;
+    rewritten: string | null;
+    similarityBefore: number;
+    similarityAfter: number;
+  } | null = null;
+  let searchQuestion = question;
+  let groundingChunks = retrieved.filter((chunk) => chunk.similarity >= RETRIEVAL_THRESHOLD);
+
+  if (groundingChunks.length === 0 && initialTopSimilarity >= QUERY_REWRITE_MIN_SIMILARITY) {
+    try {
+      const rewrite = await rewriteSearchQuestion(question);
+      rewriteUsage = { inputTokens: rewrite.inputTokens, outputTokens: rewrite.outputTokens };
+      const safeRewrite = selectSafeSearchRewrite(question, rewrite.answer);
+      if (safeRewrite) {
+        const rewrittenEmbedding = (await embedTexts([safeRewrite])).embeddings[0];
+        const rewrittenRows = await retrieveChunks(owned.chatbot.id, rewrittenEmbedding);
+        const rewrittenRetrieved: RetrievedChunk[] = rewrittenRows.map((row) => ({
+          ...row,
+          similarity: Number(row.similarity),
+        }));
+        const rewrittenTopSimilarity = rewrittenRetrieved[0]?.similarity ?? 0;
+        queryRewrite = {
+          original: question,
+          rewritten: safeRewrite,
+          similarityBefore: initialTopSimilarity,
+          similarityAfter: rewrittenTopSimilarity,
+        };
+
+        // Keep the existing confidence bar. A spelling correction is useful only
+        // when the corrected search gives us a stronger grounded match.
+        if (
+          rewrittenTopSimilarity > initialTopSimilarity &&
+          rewrittenTopSimilarity >= RETRIEVAL_THRESHOLD
+        ) {
+          searchQuestion = safeRewrite;
+          retrieved = rewrittenRetrieved;
+          groundingChunks = retrieved.filter((chunk) => chunk.similarity >= RETRIEVAL_THRESHOLD);
+        }
+      }
+    } catch {
+      // Search recovery is best-effort; the original retrieval still controls fallback.
+    }
+  }
+
   const history = existingConversation ? await loadRecentHistory(existingConversation.id) : [];
   const instructions = buildGroundedInstructions(groundingChunks);
-  const modelInput = buildChatInput(history, question);
+  const modelInput = buildChatInput(history, searchQuestion);
   const debugContext = {
     threshold: RETRIEVAL_THRESHOLD,
     model: CHAT_MODEL,
     retrieved,
+    queryRewrite,
     usedChunks: groundingChunks.map(({ id, sourceName, chunkIndex, content }) => ({
       id,
       sourceName,
@@ -292,7 +493,7 @@ export async function POST(request: Request, context: RouteContext) {
   let upstream: Response | null = null;
   if (groundingChunks.length > 0) {
     try {
-      upstream = await startChatResponse({ instructions, history, question });
+      upstream = await startChatResponse({ instructions, history, question: searchQuestion });
     } catch (error) {
       const message =
         error instanceof ChatGenerationError
@@ -355,10 +556,13 @@ export async function POST(request: Request, context: RouteContext) {
       if (!allowedOrigin) send("context", debugContext);
 
       if (!upstream?.body) {
+        const usage = addUsage({ inputTokens: null, outputTokens: null }, rewriteUsage);
         await saveAssistantMessage({
           content: CHAT_FALLBACK,
           citedChunkIds: [],
           isFallback: true,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
           latencyMs: Date.now() - requestStartedAt,
         });
         send("replace", { answer: CHAT_FALLBACK });
@@ -366,7 +570,7 @@ export async function POST(request: Request, context: RouteContext) {
           answer: CHAT_FALLBACK,
           citations: [],
           fallback: true,
-          usage: null,
+          usage,
           latencyMs: Date.now() - requestStartedAt,
         });
         controller.close();
@@ -464,13 +668,14 @@ export async function POST(request: Request, context: RouteContext) {
               owned.chatbot.id,
             );
         const latencyMs = Date.now() - requestStartedAt;
+        const totalUsage = addUsage(usage, rewriteUsage);
 
         await saveAssistantMessage({
           content: answer,
           citedChunkIds: finalCitations.map((citation) => citation.id),
           isFallback: fallback,
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
+          inputTokens: totalUsage.inputTokens,
+          outputTokens: totalUsage.outputTokens,
           latencyMs,
         });
 
@@ -482,19 +687,20 @@ export async function POST(request: Request, context: RouteContext) {
             reference: index + 1,
           })),
           fallback,
-          usage,
+          usage: totalUsage,
           latencyMs,
         });
         controller.close();
       } catch {
         if (cancelled) return;
         const latencyMs = Date.now() - requestStartedAt;
+        const totalUsage = addUsage(usage, rewriteUsage);
         await saveAssistantMessage({
           content: CHAT_ERROR_MESSAGE,
           citedChunkIds: [],
           isFallback: true,
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
+          inputTokens: totalUsage.inputTokens,
+          outputTokens: totalUsage.outputTokens,
           latencyMs,
         });
         send("replace", { answer: CHAT_ERROR_MESSAGE });
@@ -502,7 +708,7 @@ export async function POST(request: Request, context: RouteContext) {
           answer: CHAT_ERROR_MESSAGE,
           citations: [],
           fallback: true,
-          usage,
+          usage: totalUsage,
           latencyMs,
           error: "The model stream did not finish. You can retry your question.",
         });
