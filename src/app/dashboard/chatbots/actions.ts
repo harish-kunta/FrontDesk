@@ -142,6 +142,7 @@ export async function saveWidgetSettings(
   const rawWelcome = formData.get("welcomeMessage");
   const rawQuestions = formData.get("starterQuestions");
   const rawDomains = formData.get("allowedDomains");
+  const leadCapture = formData.get("leadCapture") === "on";
   const color = typeof rawColor === "string" ? rawColor.trim() : "";
   const avatarUrl = typeof rawAvatarUrl === "string" ? rawAvatarUrl.trim() : "";
   const position = typeof rawPosition === "string" ? rawPosition : "right";
@@ -202,6 +203,7 @@ export async function saveWidgetSettings(
     welcomeMessage,
     starterQuestions,
     allowedDomains: [...new Set(allowedDomains as string[])],
+    leadCapture,
   };
   await db.update(chatbots).set({ widgetConfig }).where(eq(chatbots.id, chatbot.id));
   revalidatePath(`/dashboard/chatbots/${chatbot.id}/widget`);

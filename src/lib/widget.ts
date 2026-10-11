@@ -7,6 +7,7 @@ export type WidgetConfig = {
   welcomeMessage: string;
   starterQuestions: string[];
   allowedDomains: string[];
+  leadCapture: boolean;
 };
 
 export const DEFAULT_WIDGET_CONFIG: WidgetConfig = {
@@ -15,6 +16,7 @@ export const DEFAULT_WIDGET_CONFIG: WidgetConfig = {
   welcomeMessage: "Hi! How can I help you today?",
   starterQuestions: [],
   allowedDomains: [],
+  leadCapture: false,
 };
 
 export function normalizeDomain(value: string): string | null {

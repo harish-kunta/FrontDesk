@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { signOut } from "@/auth";
 
 type WorkspaceFrameProps = {
-  active: "overview" | "chatbots";
+  active: "overview" | "chatbots" | "conversations" | "leads" | "analytics";
   chatbotCount: number;
   user: { name?: string | null; email?: string | null };
   workspace: { name: string };
@@ -11,9 +11,9 @@ type WorkspaceFrameProps = {
 };
 
 const inactiveNavigation = [
-  { icon: "▤", label: "Conversations" },
-  { icon: "⌁", label: "Leads" },
-  { icon: "◷", label: "Analytics" },
+  { icon: "▤", label: "Conversations", href: "/dashboard/conversations", active: "conversations" },
+  { icon: "⌁", label: "Leads", href: "/dashboard/leads", active: "leads" },
+  { icon: "◷", label: "Analytics", href: "/dashboard/analytics", active: "analytics" },
 ];
 
 export function WorkspaceFrame({
@@ -23,6 +23,14 @@ export function WorkspaceFrame({
   workspace,
   children,
 }: WorkspaceFrameProps) {
+  const activeLabel = {
+    overview: "Overview",
+    chatbots: "Chatbots",
+    conversations: "Conversations",
+    leads: "Leads",
+    analytics: "Analytics",
+  }[active];
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -64,12 +72,17 @@ export function WorkspaceFrame({
             <span className="nav-count">{chatbotCount}</span>
           </Link>
           {inactiveNavigation.map((item) => (
-            <div className="side-nav-item disabled" key={item.label} aria-disabled="true">
+            <Link
+              className={`side-nav-item${active === item.active ? " selected" : ""}`}
+              href={item.href}
+              key={item.label}
+              aria-current={active === item.active ? "page" : undefined}
+            >
               <span className="side-icon" aria-hidden="true">
                 {item.icon}
               </span>
               <span>{item.label}</span>
-            </div>
+            </Link>
           ))}
         </nav>
         <div className="sidebar-bottom">
@@ -110,10 +123,10 @@ export function WorkspaceFrame({
       <section className="dashboard-main">
         <header className="dashboard-topbar">
           <div className="breadcrumb">
-            Workspace <span>/</span> <b>{active === "overview" ? "Overview" : "Chatbots"}</b>
+            Workspace <span>/</span> <b>{activeLabel}</b>
           </div>
           <div className="topbar-right">
-            <span className="help-link">M1 · Knowledge setup</span>
+            <span className="help-link">M5 · Customer insights</span>
             <span className="topbar-avatar">{user.name?.slice(0, 1).toUpperCase() || "Y"}</span>
           </div>
         </header>

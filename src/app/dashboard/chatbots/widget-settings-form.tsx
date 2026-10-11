@@ -17,6 +17,7 @@ export function WidgetSettingsForm({
     welcomeMessage: string;
     starterQuestions: string[];
     allowedDomains: string[];
+    leadCapture: boolean;
   };
 }) {
   const action = saveWidgetSettings.bind(null, chatbotId);
@@ -91,6 +92,15 @@ export function WidgetSettingsForm({
           />
           <small>
             One domain per line. Embedded chat requests from other websites will be rejected.
+          </small>
+        </label>
+        <label className="m1-field m5-toggle-field">
+          <span>
+            <input name="leadCapture" type="checkbox" defaultChecked={config.leadCapture} />
+            Enable visitor lead capture
+          </span>
+          <small>
+            After two unanswered replies, visitors can optionally leave their contact details.
           </small>
         </label>
         <div className="m1-form-footer">

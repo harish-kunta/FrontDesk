@@ -2,7 +2,7 @@
 
 FrontDesk is a website-trained support and sales chatbot platform. A business will be able to add its website or documents, then give visitors a chat assistant that answers from that content, cites sources, and hands off when it does not know.
 
-This repository is being built in milestones from [the product plan](./ai-chatbot-build-plan.md). The current milestone is **M4: the visitor chat widget**.
+This repository is being built in milestones from [the product plan](./ai-chatbot-build-plan.md). The current milestone is **M5: inbox, leads, and analytics**.
 
 ## Stack
 
@@ -58,6 +58,14 @@ Open **Set up visitor chat** from the chatbot playground. Configure a brand colo
 
 The widget is a small browser script with a Shadow DOM, so host-page styles do not leak into the chat. It fetches public appearance settings and sends visitor messages to the existing grounded chat pipeline. Embedded chat messages are accepted only from an allowed browser origin; retrieval and citations remain filtered by chatbot ID. The first rate limiter is process-local and useful for the demo, but it must move to shared storage such as Redis before running multiple app instances.
 
+## M5 inbox, leads, and analytics
+
+The workspace sidebar includes a tenant-scoped conversation inbox, lead table, and analytics view. The inbox lists recent visitor chats, searches their latest visitor questions, shows fallback and feedback status, and lets the workspace owner delete a conversation. Transcript pages include citations and any contact details the visitor chose to share.
+
+Visitors can rate assistant replies in the widget. If the owner enables lead capture in widget settings, the widget offers a contact form after repeated fallback answers or when a visitor asks to speak to a person. The public feedback and lead routes check the allowed origin, rate-limit requests, and verify the message or conversation belongs to that chatbot. Leads store both workspace and chatbot IDs; dashboard queries are scoped to the signed-in workspace.
+
+Analytics summarize the last 14 days of conversations, assistant replies, grounded resolution rate, visitor ratings, repeated questions, and questions that received a fallback. Lead records can be exported as CSV. The M5 migration adds a constrained rating field, the leads table, and the lead-capture widget setting; run `pnpm db:migrate` after updating.
+
 ### Learning: where the tenant boundary lives
 
 The chatbot UUID in the embed code tells FrontDesk which assistant the visitor is talking to. It does not grant access by itself. The server checks the page origin, loads the chatbot, and includes that chatbot ID in vector retrieval and citation queries. That keeps one customer's public assistant from searching another customer's chunks. The model sees only the retrieved passages after this filter.
@@ -66,7 +74,7 @@ To try the hosted version locally, run the database migration with `pnpm db:migr
 
 ## Project structure
 
-- `src/app`: public landing page, sign-in, authenticated dashboard, chat playground, and authenticated chat, crawl, and source API routes.
+- `src/app`: public landing page, sign-in, authenticated dashboard and inbox, chat playground, and authenticated/public chat, crawl, feedback, lead, and source API routes.
 - `src/db`: Drizzle schema and database connection.
 - `src/lib/workspace.ts`: server-side authentication and workspace resolution.
 - `src/lib/ai`: server-only embedding, retrieval, and grounded chat model calls.
@@ -75,4 +83,4 @@ To try the hosted version locally, run the database migration with `pnpm db:migr
 
 ## Current scope
 
-M0 established authentication and the initial workspace boundary. M1 adds one chatbot per workspace, pasted-text sources, chunking, OpenAI embeddings, and pgvector storage. M2 adds authenticated streaming answers, chunk citations, threshold fallbacks, saved conversations, a prompt/retrieval debug panel, and a 30-question RAG evaluation harness. M3 adds website discovery and crawling, progress tracking, source URL citations, and source/chunk management. M4 adds a hosted public chat page, embed snippet, isolated visitor widget, appearance settings, origin allowlist, and a basic per-process rate limit. Conversations inboxes, visitor feedback, leads, and analytics remain M5; file uploads and billing remain M6.
+M0 established authentication and the initial workspace boundary. M1 adds one chatbot per workspace, pasted-text sources, chunking, OpenAI embeddings, and pgvector storage. M2 adds authenticated streaming answers, chunk citations, threshold fallbacks, saved conversations, a prompt/retrieval debug panel, and a 30-question RAG evaluation harness. M3 adds website discovery and crawling, progress tracking, source URL citations, and source/chunk management. M4 adds a hosted public chat page, embed snippet, isolated visitor widget, appearance settings, origin allowlist, and a basic per-process rate limit. M5 adds the workspace inbox, visitor feedback, consent-based lead capture, lead export, and basic analytics. File uploads and billing remain M6.

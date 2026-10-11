@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -7,6 +9,7 @@ import {
   pgTable,
   primaryKey,
   serial,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -114,6 +117,7 @@ export const chatbots = pgTable(
         welcomeMessage: string;
         starterQuestions: string[];
         allowedDomains: string[];
+        leadCapture: boolean;
       }>()
       .notNull()
       .default({
@@ -122,6 +126,7 @@ export const chatbots = pgTable(
         welcomeMessage: "Hi! How can I help you today?",
         starterQuestions: [],
         allowedDomains: [],
+        leadCapture: false,
       }),
     status: text("status").notNull().default("draft"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -257,7 +262,36 @@ export const messages = pgTable(
     outputTokens: integer("output_tokens"),
     latencyMs: integer("latency_ms"),
     isFallback: boolean("is_fallback").notNull().default(false),
+    rating: smallint("rating"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [index("messages_conversation_sequence_idx").on(table.conversationId, table.sequence)],
+  (table) => [
+    index("messages_conversation_sequence_idx").on(table.conversationId, table.sequence),
+    check("messages_rating_valid", sql`${table.rating} IS NULL OR ${table.rating} IN (-1, 1)`),
+  ],
+);
+
+export const leads = pgTable(
+  "leads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    chatbotId: uuid("chatbot_id")
+      .notNull()
+      .references(() => chatbots.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    email: text("email").notNull(),
+    phone: text("phone"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("leads_conversation_unique").on(table.conversationId),
+    index("leads_workspace_created_idx").on(table.workspaceId, table.createdAt),
+    index("leads_chatbot_created_idx").on(table.chatbotId, table.createdAt),
+  ],
 );

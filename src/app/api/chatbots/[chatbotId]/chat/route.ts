@@ -261,6 +261,7 @@ export async function GET(request: Request, context: RouteContext) {
       id: messages.id,
       role: messages.role,
       content: messages.content,
+      rating: messages.rating,
       citedChunkIds: messages.citedChunkIds,
       isFallback: messages.isFallback,
       inputTokens: messages.inputTokens,
@@ -284,6 +285,7 @@ export async function GET(request: Request, context: RouteContext) {
         id: row.id,
         role: row.role,
         content: row.content,
+        rating: row.rating,
         citations: citationsByMessage[index].map((citation, citationIndex) => ({
           ...citation,
           reference:
@@ -350,24 +352,28 @@ export async function POST(request: Request, context: RouteContext) {
             .values({ chatbotId: owned.chatbot.id })
             .returning({ id: conversations.id })
         )[0];
-    await db.transaction(async (tx) => {
+    const [assistantMessage] = await db.transaction(async (tx) => {
       await tx.insert(messages).values({
         conversationId: conversation.id,
         role: "user",
         content: question,
       });
-      await tx.insert(messages).values({
-        conversationId: conversation.id,
-        role: "assistant",
-        content: courtesyReply,
-        model: null,
-        latencyMs: Date.now() - requestStartedAt,
-        isFallback: false,
-      });
+      const [assistantMessage] = await tx
+        .insert(messages)
+        .values({
+          conversationId: conversation.id,
+          role: "assistant",
+          content: courtesyReply,
+          model: null,
+          latencyMs: Date.now() - requestStartedAt,
+          isFallback: false,
+        })
+        .returning({ id: messages.id });
       await tx
         .update(conversations)
         .set({ updatedAt: new Date() })
         .where(eq(conversations.id, conversation.id));
+      return [assistantMessage];
     });
 
     const latencyMs = Date.now() - requestStartedAt;
@@ -397,6 +403,7 @@ export async function POST(request: Request, context: RouteContext) {
           fallback: false,
           usage: null,
           latencyMs,
+          messageId: assistantMessage.id,
         },
       ],
     );
@@ -520,27 +527,31 @@ export async function POST(request: Request, context: RouteContext) {
     outputTokens?: number | null;
     latencyMs: number;
   }) {
-    await db.transaction(async (tx) => {
+    return db.transaction(async (tx) => {
       await tx.insert(messages).values({
         conversationId: conversation.id,
         role: "user",
         content: question,
       });
-      await tx.insert(messages).values({
-        conversationId: conversation.id,
-        role: "assistant",
-        content: input.content,
-        citedChunkIds: input.citedChunkIds,
-        model: groundingChunks.length > 0 ? CHAT_MODEL : null,
-        inputTokens: input.inputTokens ?? null,
-        outputTokens: input.outputTokens ?? null,
-        latencyMs: input.latencyMs,
-        isFallback: input.isFallback,
-      });
+      const [assistantMessage] = await tx
+        .insert(messages)
+        .values({
+          conversationId: conversation.id,
+          role: "assistant",
+          content: input.content,
+          citedChunkIds: input.citedChunkIds,
+          model: groundingChunks.length > 0 ? CHAT_MODEL : null,
+          inputTokens: input.inputTokens ?? null,
+          outputTokens: input.outputTokens ?? null,
+          latencyMs: input.latencyMs,
+          isFallback: input.isFallback,
+        })
+        .returning({ id: messages.id });
       await tx
         .update(conversations)
         .set({ updatedAt: new Date() })
         .where(eq(conversations.id, conversation.id));
+      return assistantMessage;
     });
   }
 
@@ -557,7 +568,7 @@ export async function POST(request: Request, context: RouteContext) {
 
       if (!upstream?.body) {
         const usage = addUsage({ inputTokens: null, outputTokens: null }, rewriteUsage);
-        await saveAssistantMessage({
+        const savedMessage = await saveAssistantMessage({
           content: CHAT_FALLBACK,
           citedChunkIds: [],
           isFallback: true,
@@ -572,6 +583,7 @@ export async function POST(request: Request, context: RouteContext) {
           fallback: true,
           usage,
           latencyMs: Date.now() - requestStartedAt,
+          messageId: savedMessage.id,
         });
         controller.close();
         return;
@@ -670,7 +682,7 @@ export async function POST(request: Request, context: RouteContext) {
         const latencyMs = Date.now() - requestStartedAt;
         const totalUsage = addUsage(usage, rewriteUsage);
 
-        await saveAssistantMessage({
+        const savedMessage = await saveAssistantMessage({
           content: answer,
           citedChunkIds: finalCitations.map((citation) => citation.id),
           isFallback: fallback,
@@ -689,13 +701,14 @@ export async function POST(request: Request, context: RouteContext) {
           fallback,
           usage: totalUsage,
           latencyMs,
+          messageId: savedMessage.id,
         });
         controller.close();
       } catch {
         if (cancelled) return;
         const latencyMs = Date.now() - requestStartedAt;
         const totalUsage = addUsage(usage, rewriteUsage);
-        await saveAssistantMessage({
+        const savedMessage = await saveAssistantMessage({
           content: CHAT_ERROR_MESSAGE,
           citedChunkIds: [],
           isFallback: true,
@@ -710,6 +723,7 @@ export async function POST(request: Request, context: RouteContext) {
           fallback: true,
           usage: totalUsage,
           latencyMs,
+          messageId: savedMessage.id,
           error: "The model stream did not finish. You can retry your question.",
         });
         controller.close();

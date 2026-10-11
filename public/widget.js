@@ -41,6 +41,15 @@
     .send:disabled, .composer input:disabled { opacity: .55; cursor: wait; }
     .error { padding: 10px; color: #9f3434; background: #fff2f0; border-radius: 10px; }
     .powered { padding: 0 12px 8px; color: #9699a6; text-align: center; font-size: 10px; }
+    .feedback { display: flex; align-items: center; gap: 6px; margin: -4px 0 12px; color: #737789; font-size: 11px; }
+    .feedback button { padding: 4px 8px; border: 1px solid #e3e4ec; border-radius: 8px; color: #45495a; background: white; cursor: pointer; font: inherit; }
+    .feedback button:disabled { opacity: .55; cursor: default; }
+    .lead-card { margin: 8px 0 12px; padding: 12px; border: 1px solid #e6e4f5; border-radius: 12px; background: white; }
+    .lead-card strong, .lead-card p { display: block; margin: 0 0 8px; }
+    .lead-card p { color: #737789; font-size: 12px; }
+    .lead-card form { display: grid; gap: 7px; }
+    .lead-card input { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid #dfe1e8; border-radius: 8px; color: #202333; font: inherit; }
+    .lead-card button { padding: 9px 12px; border: 0; border-radius: 8px; color: white; background: var(--brand); cursor: pointer; font: inherit; }
     :host(.left) .launcher { left: 20px; right: auto; }
     :host(.left) .panel { left: 20px; right: auto; }
     :host(.hosted) { position: fixed; z-index: 2147483000; inset: 0; display: grid; place-items: center; pointer-events: none; background: #13172c12; }
@@ -77,6 +86,9 @@
   }
   let config;
   let pending = false;
+  let unansweredCount = 0;
+  let leadFormShown = false;
+  let leadSubmitted = false;
 
   function addMessage(role, content, citations = []) {
     const bubble = document.createElement("div");
@@ -106,6 +118,109 @@
     error.className = "error";
     error.textContent = message;
     messages.append(error);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function renderFeedback(messageId) {
+    if (!messageId) return;
+    const group = document.createElement("div");
+    group.className = "feedback";
+    const label = document.createElement("span");
+    label.textContent = "Was this helpful?";
+    group.append(label);
+    for (const [rating, symbol, labelText] of [[1, "👍", "Helpful"], [-1, "👎", "Not helpful"]]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = symbol;
+      button.setAttribute("aria-label", labelText);
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          const response = await fetch(`${appUrl}/api/public/bots/${chatbotId}/feedback`, {
+            method: "POST",
+            mode: "cors",
+            credentials: "omit",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ messageId, rating }),
+          });
+          if (!response.ok) throw new Error();
+          label.textContent = "Thanks for your feedback";
+          for (const option of group.querySelectorAll("button")) option.disabled = true;
+        } catch {
+          label.textContent = "Feedback could not be saved";
+          button.disabled = false;
+        }
+      });
+      group.append(button);
+    }
+    messages.append(group);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function renderLeadCapture() {
+    if (leadFormShown || leadSubmitted || !conversationId || !config.config.leadCapture) return;
+    leadFormShown = true;
+    const card = document.createElement("div");
+    card.className = "lead-card";
+    card.setAttribute("aria-live", "polite");
+    const title = document.createElement("strong");
+    title.textContent = "Would you like us to follow up?";
+    const description = document.createElement("p");
+    description.textContent = "Leave your contact details and the team can help you directly.";
+    const leadForm = document.createElement("form");
+    for (const field of [
+      { name: "name", placeholder: "Your name", type: "text", required: true },
+      { name: "email", placeholder: "Email address", type: "email", required: true },
+      { name: "phone", placeholder: "Phone (optional)", type: "tel", required: false },
+    ]) {
+      const fieldInput = document.createElement("input");
+      fieldInput.name = field.name;
+      fieldInput.type = field.type;
+      fieldInput.placeholder = field.placeholder;
+      fieldInput.required = field.required;
+      fieldInput.maxLength = field.name === "email" ? 254 : field.name === "phone" ? 40 : 120;
+      leadForm.append(fieldInput);
+    }
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = "Request a follow-up";
+    leadForm.append(submit);
+    leadForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!conversationId) return;
+      submit.disabled = true;
+      const formData = new FormData(leadForm);
+      try {
+        const response = await fetch(`${appUrl}/api/public/bots/${chatbotId}/leads`, {
+          method: "POST",
+          mode: "cors",
+          credentials: "omit",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversationId,
+            name: formData.get("name"),
+            email: formData.get("email"),
+            phone: formData.get("phone"),
+          }),
+        });
+        const result = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(result?.error || "Your details could not be sent. Please retry.");
+        leadSubmitted = true;
+        card.replaceChildren();
+        const confirmation = document.createElement("p");
+        confirmation.textContent = result?.alreadySubmitted
+          ? "Your contact details are already with the team."
+          : "Thanks. Your contact details were sent to the team.";
+        card.append(confirmation);
+      } catch (error) {
+        const message = document.createElement("p");
+        message.textContent = error instanceof Error ? error.message : "Your details could not be sent.";
+        card.append(message);
+        submit.disabled = false;
+      }
+    });
+    card.append(title, description, leadForm);
+    messages.append(card);
     messages.scrollTop = messages.scrollHeight;
   }
 
@@ -154,6 +269,8 @@
     input.value = "";
     const answer = addMessage("assistant", "…");
     let text = "";
+    let assistantMessageId = null;
+    let wasFallback = false;
     try {
       const response = await fetch(`${appUrl}/api/chatbots/${chatbotId}/chat`, {
         method: "POST",
@@ -192,6 +309,8 @@
           text = typeof data.answer === "string" ? data.answer : text;
           answer.textContent = text;
           citations = Array.isArray(data.citations) ? data.citations : [];
+          assistantMessageId = typeof data.messageId === "string" ? data.messageId : null;
+          wasFallback = data.fallback === true;
         }
       }
       while (true) {
@@ -221,6 +340,10 @@
         }
         messages.append(links);
       }
+      renderFeedback(assistantMessageId);
+      if (wasFallback) unansweredCount++;
+      const asksForHuman = /\b(human|real person|contact (?:someone|support)|speak to (?:someone|a person)|call me)\b/i.test(question);
+      if (wasFallback && unansweredCount >= 2 || asksForHuman) renderLeadCapture();
     } catch (error) {
       answer.remove();
       showError(error instanceof Error ? error.message : "The assistant could not answer.");
